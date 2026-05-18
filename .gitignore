@@ -1,0 +1,17 @@
+# Data — 1.0GB of raw imaging; regenerate via the ingest pipeline
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Env files (use .env.example as the template)
+.env
+.env.local
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
