@@ -11,7 +11,7 @@ The application: showcase a few high impact frontend workflows (TBD) with a data
 Technology:
 Backend: Python FastAPI
 Database: PostegreSQL 15 running locally 
-Frontend: in progress. goal: optimize for demo speed
+Frontend: Vite + React 19 + TypeScript, Tailwind v4, React Router v7, TanStack Query v5 (lives in `frontend/`). Optimized for demo speed.
 
 ---
 
@@ -135,23 +135,22 @@ embpred/
 ---
 
 ## Commands
-To be filled in once the stack is chosen. Placeholders:
+Most workflows are wrapped in the `Makefile` (`make help` lists them).
 ```bash
-# install
-# (tbd)
+# install backend (.venv + deps)
+make install
 
-# run dev backend
-# (tbd)
+# reset + migrate + seed the database (drops embpred, recreates, ingests)
+make db.reset && make db.ingest
 
-# run dev frontend
-# (tbd)
+# run dev backend (uvicorn on :8000)
+make api
 
-# migrate raw data → DB
-# python scripts/ingest.py --src data/raw --db ...
+# install + run dev frontend (Vite on :5173; needs Node 20+)
+cd frontend && npm install
+make front
 
-# fabricate predictions
-# python scripts/fabricate.py --seed 42
-
-# tests
-# (tbd)
-``
+# fabricated predictions are seeded inline by the ingest step (model_version
+# "fabricated-v0"); there is no separate fabricate script.
+```
+The frontend reads `VITE_API_BASE` (defaults to `http://localhost:8000`).

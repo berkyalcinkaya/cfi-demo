@@ -1,4 +1,4 @@
-.PHONY: help install db.create db.drop db.reset db.migrate db.ingest db.psql api
+.PHONY: help install db.create db.drop db.reset db.migrate db.ingest db.psql api front
 
 PY := .venv/bin/python
 PIP := .venv/bin/pip
@@ -14,6 +14,7 @@ help:
 	@echo "make db.ingest   - run scripts/ingest.py"
 	@echo "make db.psql     - psql $(DB)"
 	@echo "make api         - run FastAPI dev server on :8000"
+	@echo "make front       - run Vite dev server on :5173"
 
 .venv:
 	python3 -m venv .venv
@@ -40,3 +41,6 @@ db.psql:
 
 api:
 	$(PY) -m uvicorn backend.api.main:app --reload --port 8000
+
+front:
+	cd frontend && npm run dev

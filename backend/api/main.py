@@ -12,11 +12,14 @@ from sqlalchemy.orm import Session
 
 from backend.api.schemas import (
     BBoxOut,
+    ComparisonEmbryoOut,
+    ComparisonResponse,
     EmbryoCardOut,
     FocalImageOut,
     FocalStackResponse,
     MilestoneOut,
     PatientResponse,
+    PatientSummaryOut,
     PloidyOut,
     PredictionOut,
     ThumbnailOut,
@@ -74,9 +77,61 @@ def _is_fab(model_version: str) -> bool:
     return model_version.startswith(FABRICATED_PREFIX)
 
 
+def _stream_and_milestones(
+    stream_rows,
+) -> tuple[list[TimelinePointOut], list[MilestoneOut]]:
+    """Collapse ordered (timepoint, stage) rows into a frame stream + per-stage
+    milestones (first_seen + frame count). Shared by the timeline and
+    comparison endpoints."""
+    first_seen: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    stream: list[TimelinePointOut] = []
+    for tp, stage in stream_rows:
+        name = stage.value
+        if name not in first_seen:
+            first_seen[name] = tp
+        counts[name] = counts.get(name, 0) + 1
+        stream.append(TimelinePointOut(timepoint=tp, stage=name))
+    milestones = [
+        MilestoneOut(stage=name, first_seen=first_seen[name], frames_at_stage=counts[name])
+        for name in sorted(first_seen, key=lambda n: first_seen[n])
+    ]
+    return stream, milestones
+
+
+def _embryo_stream_rows(s: Session, patient_id: str, embryo_label: str):
+    return (
+        s.execute(
+            select(TimepointPrediction.timepoint, TimepointPrediction.stage)
+            .where(
+                TimepointPrediction.patient_external_id == patient_id,
+                TimepointPrediction.embryo_label == embryo_label,
+            )
+            .order_by(TimepointPrediction.timepoint)
+        )
+        .all()
+    )
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/patients", response_model=list[PatientSummaryOut])
+def list_patients(s: Session = Depends(get_session)) -> list[PatientSummaryOut]:
+    """Sidebar selector source. Only patient1 is seeded today, but the UI is
+    built to grow as the database hydrates with more patients."""
+    patients = s.execute(select(Patient).order_by(Patient.name)).scalars().all()
+    return [
+        PatientSummaryOut(
+            id=p.external_id,
+            name=p.name,
+            age=_compute_age(p.date_of_birth),
+            num_embryos=len(p.embryos),
+        )
+        for p in patients
+    ]
 
 
 @app.get("/patients/{patient_id}", response_model=PatientResponse)
@@ -231,32 +286,8 @@ def get_timeline(
     if embryo is None:
         raise HTTPException(404, f"embryo {embryo_label!r} not found")
 
-    stream_rows = (
-        s.execute(
-            select(TimepointPrediction.timepoint, TimepointPrediction.stage)
-            .where(
-                TimepointPrediction.patient_external_id == patient_id,
-                TimepointPrediction.embryo_label == embryo_label,
-            )
-            .order_by(TimepointPrediction.timepoint)
-        )
-        .all()
-    )
-
-    first_seen: dict[str, int] = {}
-    counts: dict[str, int] = {}
-    stream: list[TimelinePointOut] = []
-    for tp, stage in stream_rows:
-        name = stage.value
-        if name not in first_seen:
-            first_seen[name] = tp
-        counts[name] = counts.get(name, 0) + 1
-        stream.append(TimelinePointOut(timepoint=tp, stage=name))
-
-    milestones = [
-        MilestoneOut(stage=name, first_seen=first_seen[name], frames_at_stage=counts[name])
-        for name in sorted(first_seen, key=lambda n: first_seen[n])
-    ]
+    stream_rows = _embryo_stream_rows(s, patient_id, embryo_label)
+    stream, milestones = _stream_and_milestones(stream_rows)
 
     return TimelineResponse(
         patient_id=patient_id,
@@ -265,6 +296,42 @@ def get_timeline(
         stream=stream,
         milestones=milestones,
     )
+
+
+@app.get("/patients/{patient_id}/timelines", response_model=ComparisonResponse)
+def get_comparison(
+    patient_id: str, s: Session = Depends(get_session)
+) -> ComparisonResponse:
+    """All of a patient's embryo timelines in one payload, ordered by
+    live-birth rank, for the stacked morphokinetic comparison view."""
+    patient = s.get(Patient, patient_id)
+    if patient is None:
+        raise HTTPException(404, f"patient {patient_id!r} not found")
+
+    embryos_out: list[ComparisonEmbryoOut] = []
+    for e in patient.embryos:
+        stream, milestones = _stream_and_milestones(
+            _embryo_stream_rows(s, patient_id, e.label)
+        )
+        ploidy = e.ploidy_predictions[0].ploidy.value if e.ploidy_predictions else None
+        lb_score = (
+            e.live_birth_predictions[0].score if e.live_birth_predictions else None
+        )
+        embryos_out.append(
+            ComparisonEmbryoOut(
+                label=e.label,
+                num_timepoints=e.num_timepoints,
+                ploidy=ploidy,
+                live_birth_score=lb_score,
+                stream=stream,
+                milestones=milestones,
+            )
+        )
+
+    embryos_out.sort(
+        key=lambda c: (c.live_birth_score is None, -(c.live_birth_score or 0))
+    )
+    return ComparisonResponse(patient_id=patient_id, embryos=embryos_out)
 
 
 @app.get("/images/{patient_id}/{embryo_label}/{focal_dir}/{filename}")

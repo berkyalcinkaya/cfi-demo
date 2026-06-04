@@ -46,6 +46,15 @@ class PatientResponse(BaseModel):
     embryos: list[EmbryoCardOut]
 
 
+class PatientSummaryOut(BaseModel):
+    """Lightweight row for the sidebar patient selector."""
+
+    id: str
+    name: str
+    age: int
+    num_embryos: int
+
+
 class FocalImageOut(BaseModel):
     focal_depth: int
     url: str
@@ -78,3 +87,23 @@ class TimelineResponse(BaseModel):
     num_timepoints: int
     stream: list[TimelinePointOut]
     milestones: list[MilestoneOut]
+
+
+class ComparisonEmbryoOut(BaseModel):
+    """One embryo's morphokinetic timeline for the stacked comparison view.
+
+    Ordered by live-birth rank by the endpoint; ploidy is the raw class
+    (folding mosaic -> aneuploid happens client-side at display time).
+    """
+
+    label: str
+    num_timepoints: int
+    ploidy: str | None
+    live_birth_score: float | None
+    stream: list[TimelinePointOut]
+    milestones: list[MilestoneOut]
+
+
+class ComparisonResponse(BaseModel):
+    patient_id: str
+    embryos: list[ComparisonEmbryoOut]

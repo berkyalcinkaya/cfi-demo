@@ -8,9 +8,9 @@
    ploidy + viability scores and a static blastocyst-stage thumbnail. Should provide some indication of the top embryos for viability/ploidy. Fabricated patient information should be displayed (name, age, etc)
 2. **Focal scroll view** — For each embryo, enabled per timepoint scrolling, scroll up/down through the 7
    focal-depth images (arrow keys = focal depth axis; left/right = time
-   axis). Ctrl up and down switches embryo per patient. Show embryo metadata here. 
+   axis). Ctrl up and down switches embryo per patient. Show embryo metadata somewhere here. 
 3. **Morphokinetic timeline** — per embryo, a horizontal timeline of
-   timepoints labeled with their morphokinetic stage. This is a more compact version of 3.
+   timepoints labeled with their morphokinetic stage. This is a more compact version of 2.
 
 Open questions: how to synthesize these workflows/clickpath in a meaningful way? 
 
