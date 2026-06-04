@@ -93,6 +93,31 @@ export function foldPloidy(p: string | null | undefined): PloidyDisplay | null {
   return p === 'euploid' ? 'euploid' : 'aneuploid'
 }
 
+export type RunStatus = 'succeeded' | 'failed' | 'running'
+
+export type IngestRun = {
+  run_id: string
+  patient_external_id: string
+  embryo_label: string
+  model_version: string
+  tp_start: number | null
+  tp_end: number | null
+  status: RunStatus
+  rows_written: number
+  started_at: string
+  finished_at: string | null
+  is_fabricated: boolean
+}
+
+export type EvictedEmbryo = {
+  patient_external_id: string
+  patient_name: string
+  embryo_label: string
+  evicted_at: string
+  num_images: number
+  source_hint: string
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(apiUrl(path))
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} on ${path}`)
@@ -110,4 +135,23 @@ export const api = {
     fetchJson<Timeline>(`/patients/${patientId}/embryos/${label}/timeline`),
   getComparison: (patientId: string) =>
     fetchJson<Comparison>(`/patients/${patientId}/timelines`),
+  getIngestRuns: () => fetchJson<IngestRun[]>(`/admin/ingest-runs`),
+  getEvicted: () => fetchJson<EvictedEmbryo[]>(`/admin/evicted`),
+}
+
+// --- Mock client-only auth gate (demo only; no backend/JWT/session). ---
+const AUTH_FLAG = 'embpred_auth'
+const AUTH_USER = 'embpred_user'
+
+export const auth = {
+  isAuthed: () => Boolean(localStorage.getItem(AUTH_FLAG)),
+  signIn: (email: string) => {
+    localStorage.setItem(AUTH_FLAG, '1')
+    localStorage.setItem(AUTH_USER, email)
+  },
+  signOut: () => {
+    localStorage.removeItem(AUTH_FLAG)
+    localStorage.removeItem(AUTH_USER)
+  },
+  user: () => localStorage.getItem(AUTH_USER) ?? '',
 }

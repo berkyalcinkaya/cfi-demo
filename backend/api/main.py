@@ -7,7 +7,7 @@ from typing import Iterator
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import (
@@ -15,8 +15,10 @@ from backend.api.schemas import (
     ComparisonEmbryoOut,
     ComparisonResponse,
     EmbryoCardOut,
+    EvictedEmbryoOut,
     FocalImageOut,
     FocalStackResponse,
+    IngestRunOut,
     MilestoneOut,
     PatientResponse,
     PatientSummaryOut,
@@ -30,6 +32,7 @@ from backend.db.models import (
     BboxPrediction,
     Embryo,
     Image,
+    InferenceRun,
     LiveBirthPrediction,
     Patient,
     PloidyPrediction,
@@ -41,6 +44,7 @@ from backend.db.types import BBox
 DATA_DIR = (Path(__file__).resolve().parents[2] / "data").resolve()
 ALLOWED_IMAGE_EXTS = {".jpeg", ".jpg", ".png"}
 FABRICATED_PREFIX = "fabricated-"
+COLD_STORAGE_HINT = "served from cold storage (ES Server)"
 
 app = FastAPI(title="Embpred Demo API", version="0.1.0")
 app.add_middleware(
@@ -332,6 +336,67 @@ def get_comparison(
         key=lambda c: (c.live_birth_score is None, -(c.live_birth_score or 0))
     )
     return ComparisonResponse(patient_id=patient_id, embryos=embryos_out)
+
+
+@app.get("/admin/ingest-runs", response_model=list[IngestRunOut])
+def list_ingest_runs(s: Session = Depends(get_session)) -> list[IngestRunOut]:
+    """The nightly-batch provenance ledger, newest-first. Read-only over
+    `inference_runs` — the API does not special-case fabricated rows."""
+    runs = (
+        s.execute(
+            select(InferenceRun).order_by(
+                InferenceRun.started_at.desc(), InferenceRun.run_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        IngestRunOut(
+            run_id=r.run_id,
+            patient_external_id=r.patient_external_id,
+            embryo_label=r.embryo_label,
+            model_version=r.model_version,
+            tp_start=r.tp_start,
+            tp_end=r.tp_end,
+            status=r.status.value,
+            rows_written=r.rows_written,
+            started_at=r.started_at,
+            finished_at=r.finished_at,
+            is_fabricated=_is_fab(r.model_version),
+        )
+        for r in runs
+    ]
+
+
+@app.get("/admin/evicted", response_model=list[EvictedEmbryoOut])
+def list_evicted(s: Session = Depends(get_session)) -> list[EvictedEmbryoOut]:
+    """Embryos with ≥1 image evicted to cold storage, newest-first. One row per
+    embryo (max evicted_at + evicted image count)."""
+    rows = s.execute(
+        select(
+            Image.patient_external_id,
+            Image.embryo_label,
+            Patient.name,
+            func.max(Image.evicted_at).label("evicted_at"),
+            func.count().label("num_images"),
+        )
+        .join(Patient, Patient.external_id == Image.patient_external_id)
+        .where(Image.evicted_at.is_not(None))
+        .group_by(Image.patient_external_id, Image.embryo_label, Patient.name)
+        .order_by(func.max(Image.evicted_at).desc())
+    ).all()
+    return [
+        EvictedEmbryoOut(
+            patient_external_id=r.patient_external_id,
+            patient_name=r.name,
+            embryo_label=r.embryo_label,
+            evicted_at=r.evicted_at,
+            num_images=r.num_images,
+            source_hint=COLD_STORAGE_HINT,
+        )
+        for r in rows
+    ]
 
 
 @app.get("/images/{patient_id}/{embryo_label}/{focal_dir}/{filename}")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -107,3 +107,33 @@ class ComparisonEmbryoOut(BaseModel):
 class ComparisonResponse(BaseModel):
     patient_id: str
     embryos: list[ComparisonEmbryoOut]
+
+
+# --- Admin panel (read-only views over the fabricated infra tables) ---
+
+
+class IngestRunOut(BaseModel):
+    """One row of the `inference_runs` ledger for the admin ingest log."""
+
+    run_id: str
+    patient_external_id: str
+    embryo_label: str
+    model_version: str
+    tp_start: int | None
+    tp_end: int | None
+    status: str  # succeeded | failed | running
+    rows_written: int
+    started_at: datetime
+    finished_at: datetime | None
+    is_fabricated: bool
+
+
+class EvictedEmbryoOut(BaseModel):
+    """An embryo with ≥1 image evicted to cold storage (images.evicted_at)."""
+
+    patient_external_id: str
+    patient_name: str
+    embryo_label: str
+    evicted_at: datetime  # most recent eviction across the embryo's images
+    num_images: int
+    source_hint: str

@@ -83,6 +83,7 @@ flowchart TB
       ING["Nightly pull/export ingest<br/>register images · read removal+decision"]
       A["Phase A · nightly<br/>bbox (incremental, upsert)"]
       B["Phase B · on completion<br/>stage smoothing → ploidy → live-birth"]
+      EV["Evictor daemon<br/>watermark 85/65% · oldest first · 30d grace"]
       DB[("Postgres<br/>predictions + inference_runs")]
     end
     API["FastAPI<br/>(read-only seam)"]
@@ -95,8 +96,43 @@ flowchart TB
   A -->|upsert bbox| DB
   DB -->|culture_ended_at set?| B
   B -->|upsert stage/ploidy/live-birth| DB
+  EV -->|mark evicted_at| DB
   DB --> API --> UI
+  API -.->|evicted reads| ES
 ```
+
+## Disk pressure (Phase 1)
+
+7 focal × ~500 tp × ~100 KB ≈ **~350 MB/embryo** → ~2,800 embryos on a 1 TB
+disk. Months of runway, not years. Confirm with a real JPEG measurement.
+
+**The on-prem disk is a cache, not source of truth.** Images live durably on
+the ES Server (and S3 in Phase 2); local disk just holds them for inference +
+recent UI reads. **Predictions are never evicted** — tiny rows, future training
+labels.
+
+**Reuse the image seam.** Add `images.evicted_at` (NULL = local; set = fall
+back to ES Server / S3). `_image_url` / `get_image` picks the source — no API
+or frontend changes.
+
+**Evictor daemon — watermark-based:**
+- **Trigger** disk > **85%**; **stop** at **65%** (chunked, avoids thrashing).
+- **Order:** oldest `culture_ended_at` first (LRU by case completion).
+- **Eligible:** `culture_ended_at IS NOT NULL` AND Phase B complete AND
+  `culture_ended_at < now() - INTERVAL '30 days'` (grace for embryologist
+  review).
+- **Mechanics:** set `images.evicted_at` *first*, then delete files.
+  Interruption degrades gracefully — reads fall back early; orphan files get
+  swept later.
+
+Edges: grace too short → recent reads pay ES-Server latency; ES Server
+unreachable on an evicted read → surface degraded state, don't silently 500;
+re-running an old case → resolver fetches from ES Server, or pre-warm before
+Phase B backfill.
+
+Phase 2 collapses this: with images replicated to S3, the on-prem disk becomes
+a TTL cache and the watermark daemon goes away.
+
 
 
 

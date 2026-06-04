@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import REAL
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.base import Base
-from backend.db.enums import MorphokineticStage, PloidyClass
+from backend.db.enums import MorphokineticStage, PloidyClass, RunStatus
 from backend.db.types import BBox, Box
 
 _StageEnum = PGEnum(
@@ -29,6 +29,12 @@ _StageEnum = PGEnum(
 _PloidyEnum = PGEnum(
     PloidyClass,
     name="ploidy_class",
+    create_type=False,
+    values_callable=lambda e: [m.value for m in e],
+)
+_RunStatusEnum = PGEnum(
+    RunStatus,
+    name="run_status",
     create_type=False,
     values_callable=lambda e: [m.value for m in e],
 )
@@ -80,6 +86,9 @@ class Embryo(Base):
     live_birth_predictions: Mapped[list["LiveBirthPrediction"]] = relationship(
         back_populates="embryo", cascade="all", passive_deletes=True
     )
+    inference_runs: Mapped[list["InferenceRun"]] = relationship(
+        back_populates="embryo", cascade="all", passive_deletes=True
+    )
 
 
 class Image(Base):
@@ -90,6 +99,11 @@ class Image(Base):
     timepoint: Mapped[int] = mapped_column(Integer, primary_key=True)
     focal_depth: Mapped[int] = mapped_column(Integer, primary_key=True)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL = present on local disk; set = evicted to cold storage (ES Server / S3).
+    # The image-resolver seam (infra_plan.md §Disk pressure) reads this column.
+    evicted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
     embryo: Mapped[Embryo] = relationship(back_populates="images")
 
@@ -191,4 +205,38 @@ class LiveBirthPrediction(Base):
             name="fk_live_birth_embryo",
         ),
         CheckConstraint("score >= 0 AND score <= 1", name="ck_live_birth_score_range"),
+    )
+
+
+class InferenceRun(Base):
+    """Provenance ledger for the nightly batch pipeline (infra_plan.md §Schema
+    deltas). One row per (embryo, model_version) run; surfaced read-only by the
+    admin panel. Demo rows are fabricated + deterministic."""
+
+    __tablename__ = "inference_runs"
+
+    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    patient_external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    embryo_label: Mapped[str] = mapped_column(Text, nullable=False)
+    model_version: Mapped[str] = mapped_column(Text, nullable=False)
+    tp_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tp_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[RunStatus] = mapped_column(_RunStatusEnum, nullable=False)
+    rows_written: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    embryo: Mapped[Embryo] = relationship(back_populates="inference_runs")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["patient_external_id", "embryo_label"],
+            ["embryos.patient_external_id", "embryos.label"],
+            ondelete="CASCADE",
+            name="fk_inference_runs_embryo",
+        ),
     )

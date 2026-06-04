@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react'
-import { Link, useLocation } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, auth } from '../lib/api'
 
 function useActivePatientId(): string | undefined {
   const { pathname } = useLocation()
@@ -60,6 +60,16 @@ function PatientList({ activeId }: { activeId?: string }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const activeId = useActivePatientId()
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const adminActive = pathname.startsWith('/admin')
+  const user = auth.user()
+
+  function handleSignOut() {
+    auth.signOut()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <div className="min-h-screen flex bg-zinc-50">
       <aside className="w-60 shrink-0 border-r border-zinc-200 bg-white flex flex-col">
@@ -79,6 +89,32 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <div className="flex-1 overflow-y-auto pb-4">
           <PatientList activeId={activeId} />
+        </div>
+        <div className="border-t border-zinc-200 p-2 space-y-0.5">
+          <Link
+            to="/admin"
+            className={`block rounded-md px-3 py-2 text-sm font-medium transition ${
+              adminActive
+                ? 'bg-zinc-900 text-white'
+                : 'text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            Admin
+          </Link>
+          <button
+            onClick={handleSignOut}
+            className="w-full text-left rounded-md px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 transition"
+          >
+            Sign out
+          </button>
+          {user && (
+            <div
+              className="px-3 pt-1 pb-0.5 text-[10px] text-zinc-400 truncate"
+              title={user}
+            >
+              {user}
+            </div>
+          )}
         </div>
       </aside>
       <main className="flex-1 min-w-0">{children}</main>

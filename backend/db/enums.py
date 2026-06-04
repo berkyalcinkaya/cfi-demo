@@ -22,3 +22,9 @@ class PloidyClass(str, Enum):
     euploid = "euploid"
     aneuploid = "aneuploid"
     mosaic = "mosaic"
+
+
+class RunStatus(str, Enum):
+    succeeded = "succeeded"
+    failed = "failed"
+    running = "running"

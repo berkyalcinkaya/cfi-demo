@@ -1,6 +1,9 @@
-"""Step 2: seed one patient + 10 embryos from data/patient1/.
+"""Step 2: seed the 6-patient roster + their embryos from the generated trees.
 
-Re-runnable: deletes the existing patient row (cascading children) before inserting.
+Re-runnable: regenerates the patient trees (scripts/generate_patients.py), then
+deletes every roster patient row (cascading children) before re-inserting. Also
+seeds the fabricated `inference_runs` ledger and stamps `images.evicted_at` on
+the oldest embryos — the demo-facing slice of infra_plan.md.
 """
 from __future__ import annotations
 
@@ -9,17 +12,18 @@ import csv
 import hashlib
 import random
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, insert, update
 from sqlalchemy.orm import Session
 
-from backend.db.enums import MorphokineticStage, PloidyClass
+from backend.db.enums import MorphokineticStage, PloidyClass, RunStatus
 from backend.db.models import (
     BboxPrediction,
     Embryo,
     Image,
+    InferenceRun,
     LiveBirthPrediction,
     Patient,
     PloidyPrediction,
@@ -28,16 +32,21 @@ from backend.db.models import (
 from backend.db.session import engine
 from backend.db.types import BBox
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "patient1"
-
-PATIENT_SEED = {
-    "external_id": "patient1",
-    "name": "Jane Cooper",
-    "date_of_birth": date(1990, 7, 22),
-    "office": "Carolina's Fertility Clinic",
-}
+# Sibling import — `make db.ingest` runs `python scripts/ingest.py`, so the
+# scripts dir is on sys.path[0]. generate_patients owns the roster + data trees.
+from generate_patients import DATA_DIR, OFFICE, PATIENTS, generate
 
 BLASTOCYST_STAGES = {"tB", "tEB"}
+
+# Deterministic "nightly batch" timing for the fabricated inference_runs ledger.
+# Anchored to a fixed constant (NOT now()) so output is byte-identical per run.
+NIGHTLY_ANCHOR = datetime(2026, 6, 4, 2, 0, tzinfo=timezone.utc)
+NIGHTS = 4  # spread embryo batches across the last 4 nights
+EVICTION_ANCHOR = datetime(2026, 6, 2, 4, 30, tzinfo=timezone.utc)
+NUM_EVICTED = 2  # oldest-by-date_seeded embryos to mark evicted, across the roster
+# The one run we flag as failed so the admin panel looks real (infra_plan.md
+# "nightly failure → resumable"). Emb3 always exists (every patient has ≥4).
+FAILED_RUN = ("patient2", "Emb3", "frcnn-v1")
 
 FOCAL_DEPTHS: tuple[tuple[int, str], ...] = ((-15, "F-15"), (0, "F0"), (15, "F15"))
 
@@ -296,93 +305,186 @@ def seed_fabricated_predictions(
     return summary
 
 
-def main() -> None:
-    images_dir = DATA_DIR / "images"
-    bbox_dir = DATA_DIR / "predictions" / "bbox"
-    tp_dir = DATA_DIR / "predictions" / "timepoints"
+def seed_patient(session: Session, cfg: dict) -> tuple[Patient, dict[str, int]]:
+    """Insert one patient + its embryos + images + real & fabricated predictions
+    from its generated tree at data/<external_id>/. Returns (patient, counts)."""
+    pdir = DATA_DIR / cfg["external_id"]
+    images_dir = pdir / "images"
+    bbox_dir = pdir / "predictions" / "bbox"
+    tp_dir = pdir / "predictions" / "timepoints"
 
-    embryo_labels = discover_embryos(images_dir)
-    if len(embryo_labels) != 10:
-        print(f"warning: expected 10 embryos, found {len(embryo_labels)}")
+    patient = Patient(
+        external_id=cfg["external_id"],
+        name=cfg["name"],
+        date_of_birth=cfg["date_of_birth"],
+        office=OFFICE,
+    )
+    session.add(patient)
+
+    for label in discover_embryos(images_dir):
+        files = sorted_run_files(images_dir / label / "F0")
+        date_seeded, well = parse_filename_meta(files[0].name)
+        thumb = compute_thumbnail_timepoint(
+            tp_dir / f"{label}_postprocessed_timelapse_outputs.csv"
+        )
+        patient.embryos.append(
+            Embryo(
+                label=label,
+                num_timepoints=len(files),
+                date_seeded=date_seeded,
+                well=well,
+                thumbnail_timepoint=thumb,
+            )
+        )
+    session.flush()
+
+    image_count = seed_images(session, patient, images_dir)
+    bbox_count, bbox_null = seed_bbox_predictions(session, patient, bbox_dir)
+    stage_count, _ = seed_timepoint_predictions(session, patient, tp_dir)
+    seed_fabricated_predictions(session, patient)
+    return patient, {
+        "images": image_count,
+        "bbox": bbox_count,
+        "bbox_null": bbox_null,
+        "stages": stage_count,
+    }
+
+
+# Per-embryo run passes for the ledger: (model_version, rows_written, per_tp).
+# One run per (embryo, model_version): the two real models + the fabricated one.
+def _run_passes(num_timepoints: int) -> tuple[tuple[str, int, bool], ...]:
+    return (
+        (BBOX_MODEL_VERSION, num_timepoints, True),
+        (STAGE_MODEL_VERSION, num_timepoints, True),
+        (FABRICATED_MODEL_VERSION, 2, False),  # 1 ploidy + 1 live-birth row
+    )
+
+
+def seed_inference_runs(
+    session: Session, patients: list[Patient]
+) -> tuple[int, int]:
+    """Fabricate the inference_runs ledger: one run per (embryo, model_version),
+    with deterministic recent-nightly timestamps. Exactly one run is flagged
+    `failed` (resumable nightly failure). Returns (total_runs, failed_runs)."""
+    rows: list[dict] = []
+    failed = 0
+    g = 0  # global embryo index — spreads batches across recent nights
+    for patient in patients:
+        for embryo in sorted(
+            patient.embryos, key=lambda e: _embryo_sort_key(e.label)
+        ):
+            night = NIGHTLY_ANCHOR - timedelta(days=g % NIGHTS)
+            cursor = night + timedelta(minutes=(g // NIGHTS) * 9)
+            for model_version, n_rows, per_tp in _run_passes(embryo.num_timepoints):
+                tp_start = 0 if per_tp else None
+                tp_end = embryo.num_timepoints - 1 if per_tp else None
+                rows_written = n_rows
+                status = RunStatus.succeeded
+                if (patient.external_id, embryo.label, model_version) == FAILED_RUN:
+                    # Crashed midway through the sequence; resumable next night.
+                    status = RunStatus.failed
+                    tp_end = embryo.num_timepoints // 2
+                    rows_written = tp_end
+                    failed += 1
+                duration = timedelta(minutes=max(1, rows_written // 150))
+                finished = cursor + duration
+                rows.append(
+                    {
+                        "run_id": f"{model_version}:{patient.external_id}:{embryo.label}",
+                        "patient_external_id": patient.external_id,
+                        "embryo_label": embryo.label,
+                        "model_version": model_version,
+                        "tp_start": tp_start,
+                        "tp_end": tp_end,
+                        "status": status,
+                        "rows_written": rows_written,
+                        "started_at": cursor,
+                        "finished_at": finished,
+                    }
+                )
+                cursor = finished + timedelta(seconds=20)
+            g += 1
+
+    session.execute(insert(InferenceRun), rows)
+    return len(rows), failed
+
+
+def seed_evictions(
+    session: Session, patients: list[Patient]
+) -> list[tuple[str, str, date]]:
+    """Stamp `evicted_at` on every image row of the NUM_EVICTED oldest embryos
+    (by date_seeded) across the whole roster, simulating disk-pressure eviction
+    to cold storage (infra_plan.md §Disk pressure)."""
+    all_embryos = [(p, e) for p in patients for e in p.embryos]
+    all_embryos.sort(
+        key=lambda pe: (
+            pe[1].date_seeded,
+            pe[0].external_id,
+            _embryo_sort_key(pe[1].label),
+        )
+    )
+    evicted: list[tuple[str, str, date]] = []
+    for i, (patient, embryo) in enumerate(all_embryos[:NUM_EVICTED]):
+        ts = EVICTION_ANCHOR - timedelta(days=i)
+        session.execute(
+            update(Image)
+            .where(
+                Image.patient_external_id == patient.external_id,
+                Image.embryo_label == embryo.label,
+            )
+            .values(evicted_at=ts)
+        )
+        evicted.append((patient.external_id, embryo.label, embryo.date_seeded))
+    return evicted
+
+
+def main() -> None:
+    generate(verbose=True)
+    roster_ids = [p["external_id"] for p in PATIENTS]
 
     with Session(engine) as s:
-        s.execute(
-            delete(Patient).where(Patient.external_id == PATIENT_SEED["external_id"])
-        )
+        # Delete every roster patient up front (cascades children), then re-insert.
+        s.execute(delete(Patient).where(Patient.external_id.in_(roster_ids)))
         s.flush()
 
-        patient = Patient(**PATIENT_SEED)
-        s.add(patient)
+        patients: list[Patient] = []
+        totals = {"images": 0, "bbox": 0, "bbox_null": 0, "stages": 0}
+        for cfg in PATIENTS:
+            patient, counts = seed_patient(s, cfg)
+            patients.append(patient)
+            for k in totals:
+                totals[k] += counts[k]
 
-        for label in embryo_labels:
-            files = sorted_run_files(images_dir / label / "F0")
-            date_seeded, well = parse_filename_meta(files[0].name)
-            thumb = compute_thumbnail_timepoint(
-                tp_dir / f"{label}_postprocessed_timelapse_outputs.csv"
-            )
-            patient.embryos.append(
-                Embryo(
-                    label=label,
-                    num_timepoints=len(files),
-                    date_seeded=date_seeded,
-                    well=well,
-                    thumbnail_timepoint=thumb,
-                )
-            )
-
-        s.flush()
-        image_count = seed_images(s, patient, images_dir)
-        bbox_count, bbox_null = seed_bbox_predictions(s, patient, bbox_dir)
-        stage_count, stage_dist = seed_timepoint_predictions(s, patient, tp_dir)
-        fab_summary = seed_fabricated_predictions(s, patient)
+        run_total, run_failed = seed_inference_runs(s, patients)
+        evicted = seed_evictions(s, patients)
         s.commit()
 
-        print(
-            f"Seeded {patient.external_id} — {patient.name}, "
-            f"DOB {patient.date_of_birth}, {patient.office}"
-        )
-        total_tp = 0
-        for e in sorted(patient.embryos, key=lambda x: _embryo_sort_key(x.label)):
-            total_tp += e.num_timepoints
-            thumb = (
-                f"thumb_tp={e.thumbnail_timepoint}"
-                if e.thumbnail_timepoint is not None
-                else "thumb_tp=NULL"
-            )
+        print()
+        total_embryos = 0
+        for patient in patients:
+            embs = sorted(patient.embryos, key=lambda e: _embryo_sort_key(e.label))
+            total_embryos += len(embs)
+            labels = " ".join(e.label for e in embs)
             print(
-                f"  {e.label:<6}  K={e.num_timepoints:<5}  "
-                f"seeded={e.date_seeded}  well={e.well}  {thumb}"
+                f"{patient.external_id:<9} {patient.name:<14} "
+                f"DOB {patient.date_of_birth}  {len(embs)} embryos  [{labels}]"
             )
         print(
-            f"Inserted {image_count:,} image rows "
-            f"({total_tp:,} timepoints × {len(FOCAL_DEPTHS)} focal depths)."
+            f"\nSeeded {len(patients)} patients / {total_embryos} embryos "
+            f"at {OFFICE}."
         )
         print(
-            f"Inserted {bbox_count:,} bbox rows "
-            f"({bbox_null:,} NULL, model={BBOX_MODEL_VERSION})."
+            f"Inserted {totals['images']:,} image rows, "
+            f"{totals['bbox']:,} bbox ({totals['bbox_null']:,} NULL), "
+            f"{totals['stages']:,} timepoint-stage rows."
         )
         print(
-            f"Inserted {stage_count:,} timepoint-stage rows "
-            f"(model={STAGE_MODEL_VERSION})."
+            f"Inference-runs ledger: {run_total} runs "
+            f"({run_failed} failed, model versions "
+            f"{BBOX_MODEL_VERSION}/{STAGE_MODEL_VERSION}/{FABRICATED_MODEL_VERSION})."
         )
-        stage_parts = [
-            f"{s.value}={stage_dist.get(s.value, 0):,}"
-            for s in MorphokineticStage
-            if stage_dist.get(s.value, 0) > 0
-        ]
-        print(f"  stage distribution: {', '.join(stage_parts)}")
-
-        print(
-            f"\nFabricated {len(fab_summary)} ploidy + live-birth predictions "
-            f"(model={FABRICATED_MODEL_VERSION}); ranked by live-birth score:"
-        )
-        for label, ploidy, p_score, lb in sorted(
-            fab_summary, key=lambda r: r[3], reverse=True
-        ):
-            print(
-                f"  {label:<6}  ploidy={ploidy.value:<10}({p_score:.2f})  "
-                f"live_birth={lb:.2f}"
-            )
+        ev = ", ".join(f"{pid}/{lbl} (seeded {ds})" for pid, lbl, ds in evicted)
+        print(f"Evicted {len(evicted)} oldest embryos to cold storage: {ev}")
 
 
 if __name__ == "__main__":
