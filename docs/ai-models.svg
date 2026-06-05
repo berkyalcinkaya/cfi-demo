@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1336 580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- background (keeps dark labels readable in GitHub dark mode) -->
+  <rect x="0" y="0" width="1336" height="580" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- title -->
+  <text x="28" y="40" font-size="19" font-weight="700" fill="#0f172a">Embpred prediction pipeline — four computer-vision models</text>
+  <text x="28" y="62" font-size="12.5" fill="#64748b">Per-patient batch inference. Raw stage predictions are smoothed + monotonically decoded before downstream models and the clinic UI consume them.</text>
+
+  <!-- ===================== arrows (drawn first, under nodes) ===================== -->
+  <g fill="none" stroke="#94a3b8" stroke-width="2">
+    <!-- input -> Faster R-CNN -->
+    <line x1="164" y1="290" x2="196" y2="290" marker-end="url(#arrow)"/>
+    <!-- Faster R-CNN -> Stage classifier -->
+    <line x1="392" y1="290" x2="424" y2="290" marker-end="url(#arrow)"/>
+    <!-- Stage classifier -> post-processing -->
+    <line x1="620" y1="290" x2="652" y2="290" marker-end="url(#arrow)"/>
+    <!-- post-processing -> Ploidy (branch up) -->
+    <polyline points="858,290 878,290 878,171 898,171" marker-end="url(#arrow)"/>
+    <!-- post-processing -> Live-birth (branch down) -->
+    <polyline points="858,290 878,290 878,409 898,409" marker-end="url(#arrow)"/>
+    <!-- Ploidy -> output (converge) -->
+    <polyline points="1130,171 1150,171 1150,290 1162,290" marker-end="url(#arrow)"/>
+    <!-- Live-birth -> output (converge) -->
+    <polyline points="1130,409 1150,409 1150,290 1162,290" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- ===================== input ===================== -->
+  <rect x="24" y="220" width="140" height="140" rx="14" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="94" y="278" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Timelapse input</text>
+  <text x="94" y="300" text-anchor="middle" font-size="11.5" fill="#475569">focal-stack</text>
+  <text x="94" y="318" text-anchor="middle" font-size="11.5" fill="#475569">frames</text>
+
+  <!-- ===================== Model 1: Faster R-CNN (real) ===================== -->
+  <rect x="196" y="215" width="196" height="150" rx="14" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <circle cx="370" cy="237" r="13" fill="#4338ca"/>
+  <text x="370" y="241" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">1</text>
+  <text x="212" y="243" font-size="15" font-weight="700" fill="#0f172a">Embryo localizer</text>
+  <text x="212" y="262" font-size="11.5" fill="#475569">Faster R-CNN</text>
+  <rect x="212" y="272" width="64" height="19" rx="9.5" fill="#e0e7ff"/>
+  <text x="244" y="285" text-anchor="middle" font-size="11" font-weight="600" fill="#3730a3">frcnn-v1</text>
+  <text x="212" y="320" font-size="11.5" fill="#334155">In · raw focal frames</text>
+  <text x="212" y="340" font-size="11.5" fill="#334155">Out · bbox crop, per image</text>
+
+  <!-- ===================== Model 2: Stage classifier (real) ===================== -->
+  <rect x="424" y="215" width="196" height="150" rx="14" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <circle cx="598" cy="237" r="13" fill="#4338ca"/>
+  <text x="598" y="241" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">2</text>
+  <text x="440" y="243" font-size="15" font-weight="700" fill="#0f172a">Stage classifier</text>
+  <text x="440" y="262" font-size="11.5" fill="#475569">Morphokinetic CNN</text>
+  <rect x="440" y="272" width="86" height="19" rx="9.5" fill="#e0e7ff"/>
+  <text x="483" y="285" text-anchor="middle" font-size="11" font-weight="600" fill="#3730a3">timelapse-v1</text>
+  <text x="440" y="320" font-size="11.5" fill="#334155">In · cropped frames</text>
+  <text x="440" y="340" font-size="11.5" fill="#334155">Out · raw per-frame stage</text>
+
+  <!-- ===================== Post-processing (deterministic, not a model) ===================== -->
+  <rect x="652" y="215" width="206" height="150" rx="14" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="668" y="243" font-size="14" font-weight="700" fill="#0f172a">Stage post-processing</text>
+  <text x="668" y="262" font-size="11.5" fill="#475569">deterministic decode</text>
+  <text x="668" y="291" font-size="12" fill="#155e75">• Stage smoothing</text>
+  <text x="668" y="313" font-size="12" fill="#155e75">• Monotonic decoding</text>
+  <text x="668" y="339" font-size="10.5" font-style="italic" fill="#64748b">enforces t1 ≤ … ≤ tEB</text>
+
+  <!-- ===================== Model 3: Ploidy (fabricated) ===================== -->
+  <rect x="898" y="96" width="232" height="150" rx="14" fill="#fffbeb" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/>
+  <circle cx="1108" cy="118" r="13" fill="#b45309"/>
+  <text x="1108" y="122" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">3</text>
+  <text x="914" y="124" font-size="15" font-weight="700" fill="#0f172a">Ploidy classifier</text>
+  <text x="914" y="143" font-size="11.5" fill="#475569">Chromosomal normality · per embryo</text>
+  <rect x="914" y="153" width="92" height="19" rx="9.5" fill="#fef3c7"/>
+  <text x="960" y="166" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">fabricated-v0</text>
+  <text x="914" y="201" font-size="11.5" fill="#334155">In · blastocyst frames</text>
+  <text x="914" y="221" font-size="11.5" fill="#334155">Out · euploid / aneuploid / mosaic</text>
+
+  <!-- ===================== Model 4: Live-birth (fabricated, coming soon) ===================== -->
+  <rect x="898" y="334" width="232" height="150" rx="14" fill="#fffbeb" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/>
+  <circle cx="1108" cy="356" r="13" fill="#b45309"/>
+  <text x="1108" y="360" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">4</text>
+  <text x="914" y="362" font-size="15" font-weight="700" fill="#0f172a">Live-birth predictor</text>
+  <text x="914" y="381" font-size="11.5" fill="#475569">Headline output · coming soon</text>
+  <rect x="914" y="391" width="92" height="19" rx="9.5" fill="#fef3c7"/>
+  <text x="960" y="404" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">fabricated-v0</text>
+  <text x="914" y="439" font-size="11.5" fill="#334155">In · blast frames + ploidy</text>
+  <text x="914" y="459" font-size="11.5" fill="#334155">Out · P(live birth), per embryo</text>
+
+  <!-- ===================== output ===================== -->
+  <rect x="1162" y="220" width="150" height="140" rx="14" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1237" y="278" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Embryo ranking</text>
+  <text x="1237" y="300" text-anchor="middle" font-size="11.5" fill="#475569">surfaced in</text>
+  <text x="1237" y="318" text-anchor="middle" font-size="11.5" fill="#475569">clinic UI</text>
+
+  <!-- ===================== legend ===================== -->
+  <rect x="28" y="518" width="22" height="14" rx="3" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="58" y="530" font-size="11.5" fill="#334155">Production model — real predictions on disk</text>
+  <rect x="392" y="518" width="22" height="14" rx="3" fill="#fffbeb" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="422" y="530" font-size="11.5" fill="#334155">Fabricated for demo (fabricated-v0)</text>
+  <rect x="720" y="518" width="22" height="14" rx="3" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="750" y="530" font-size="11.5" fill="#334155">Deterministic post-processing (not a model)</text>
+  <text x="28" y="556" font-size="11" font-style="italic" fill="#64748b">Embryo-level models (ploidy, live-birth) run only after the decoded stage reaches a blastocyst (tB / tEB).</text>
+</svg>
